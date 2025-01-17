@@ -1,32 +1,50 @@
+import os
 import random
 
 from dotenv import load_dotenv
 import telebot
 from telebot.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
+from tick_tack_toe import (
+    check_field_match,
+    generate_keyboard_markup,
+    make_bot_move,
+    make_winner_text,
+    update_field_sign,
+)
+
 
 load_dotenv()
 
 
-API_TOKEN = os.getenv()
+API_TOKEN = os.getenv("TELEGRAM_API_TOKEN")
 
 
 bot = telebot.TeleBot(API_TOKEN)
 
 
 GUESS_NUMBER_GAME = 'Guess Number'
-THE_FIELD_OF_WONDERS = 'The Field of Wonders'
 TICK_TACK_TOE = 'Tick Tack Toe'
+
+
+EASY_DIFFICULTY = "EASY"
+NORMAL_DIFFICULTY = "NORMAL"
+HARD_DIFFICULTY = "HARD"
 
 
 MainMenuKeyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
 
 button_1 = KeyboardButton(GUESS_NUMBER_GAME)
-button_2 = KeyboardButton(THE_FIELD_OF_WONDERS)
 button_3 = KeyboardButton(TICK_TACK_TOE)
+MainMenuKeyboard.add(button_1, button_3)
 
 
-MainMenuKeyboard.add(button_1, button_2, button_3)
+TickTackToeDifficultyKeyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+
+button_4 = KeyboardButton(EASY_DIFFICULTY)
+button_5 = KeyboardButton(NORMAL_DIFFICULTY)
+button_6 = KeyboardButton(HARD_DIFFICULTY)
+TickTackToeDifficultyKeyboard.add(button_4, button_5, button_6)
 
 
 GUESS_NUMBER_PLAYERS = {}
@@ -43,7 +61,7 @@ TICK_TACK_TOE_PLAYERS = {}
 def start(message: Message):
     sent_message = bot.send_message(
         message.chat.id,
-        "Welcome! Pick a game you'd like to play.",
+        "Welcome! Pick a game you'd like to play. Enter /start to start from the beginning",
         reply_markup=MainMenuKeyboard,
     )
 
@@ -55,8 +73,6 @@ def handle_game_startup(message: Message):
         start_user_number_guess(message.chat.id)
     elif message.text == TICK_TACK_TOE:
         start_tick_tack_toe(message.chat.id)
-    elif message.text == THE_FIELD_OF_WONDERS:
-        start_the_field_of_wonders(message.chat.id)
     else:
         sent_message = bot.send_message(
             message.chat.id,
@@ -74,7 +90,7 @@ def handle_game_startup(message: Message):
 def start_user_number_guess(chat_id: int):
     random_number = random.randint(
         GUESS_NUMBER_CONFIG["min_number"],
-        GUESS_NUMBER_CONFIG["max_number"] + 1
+        GUESS_NUMBER_CONFIG["max_number"],
     )
 
     GUESS_NUMBER_PLAYERS[chat_id] = {
@@ -131,11 +147,69 @@ def handle_user_number_guess(message: Message):
 
 
 def start_tick_tack_toe(chat_id: int):
-    ...
+    TICK_TACK_TOE_PLAYERS[chat_id] = {
+        "field": [["", "", ""], ["", "", ""], ["", "", ""],],
+        "difficulty": None,
+    }
+    TICK_TACK_TOE_PLAYERS[chat_id]["player_sign"] = "X"
+    TICK_TACK_TOE_PLAYERS[chat_id]["bot_sign"] = "O"
+
+    sent_message = bot.send_message(chat_id, "Pick difficulty:", reply_markup=TickTackToeDifficultyKeyboard)
+    bot.register_next_step_handler(sent_message, handle_difficulty_pick)
 
 
-def start_the_field_of_wonders(chat_id: int):
-    ...
+def handle_difficulty_pick(message: Message):
+    if message.text not in [EASY_DIFFICULTY, NORMAL_DIFFICULTY, HARD_DIFFICULTY]:
+        sent_message = bot.send_message(message.chat.id, "Invalid input! Pick difficulty:", reply_markup=TickTackToeDifficultyKeyboard)
+        bot.register_next_step_handler(sent_message, handle_difficulty_pick)
+        return
+
+    # user always have first move
+    TICK_TACK_TOE_PLAYERS[message.chat.id]["difficulty"] = message.text
+    sent_message = bot.send_message(message.chat.id, "Your turn", reply_markup=generate_keyboard_markup(TICK_TACK_TOE_PLAYERS[message.chat.id]["field"]))
+    bot.register_next_step_handler(sent_message, handle_tick_tack_toe)
+
+
+def handle_tick_tack_toe(message: Message):
+    chat_id = message.chat.id
+    message_text = message.text
+
+    # Validate message text
+    if not len(message_text) == 3 or not message_text[1].isdigit():
+        sent_message = bot.send_message(chat_id, "Invalid input", reply_markup=generate_keyboard_markup(TICK_TACK_TOE_PLAYERS[message.chat.id]["field"]))
+        bot.register_next_step_handler(sent_message, handle_tick_tack_toe)
+        return
+
+    sign_position = int(message_text[1])
+    
+    # Update field according to user input
+    TICK_TACK_TOE_PLAYERS[chat_id]["field"] = update_field_sign(
+        TICK_TACK_TOE_PLAYERS[chat_id]["field"],
+        TICK_TACK_TOE_PLAYERS[chat_id]["player_sign"],
+        sign_position,
+    )
+
+    if check_field_match(TICK_TACK_TOE_PLAYERS[chat_id]["field"]):
+        game_end_text = make_winner_text(TICK_TACK_TOE_PLAYERS[chat_id])
+        sent_message = bot.send_message(chat_id, game_end_text, reply_markup=MainMenuKeyboard)
+        bot.register_next_step_handler(sent_message, handle_game_startup)
+        return
+    
+    bot.send_message(chat_id, "Bot is making it's turn....")
+
+    TICK_TACK_TOE_PLAYERS[chat_id]["field"] = make_bot_move(
+        TICK_TACK_TOE_PLAYERS[chat_id]["field"],
+        TICK_TACK_TOE_PLAYERS[chat_id]["bot_sign"],
+    )
+
+    if check_field_match(TICK_TACK_TOE_PLAYERS[chat_id]["field"]):
+        game_end_text = make_winner_text(TICK_TACK_TOE_PLAYERS[chat_id])
+        sent_message = bot.send_message(chat_id, game_end_text, reply_markup=MainMenuKeyboard)
+        bot.register_next_step_handler(sent_message, handle_game_startup)
+        return
+    
+    sent_message = bot.send_message(chat_id, "Your turn....", reply_markup=generate_keyboard_markup(TICK_TACK_TOE_PLAYERS[message.chat.id]["field"]))
+    bot.register_next_step_handler(sent_message, handle_tick_tack_toe)
 
 
 bot.infinity_polling()
